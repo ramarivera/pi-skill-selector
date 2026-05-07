@@ -1,6 +1,6 @@
 {
   "name": "@ramarivera/pi-skill-selector",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Pi extension that lets you type $ to fuzzy-pick skills and insert /skill:name into the prompt.",
   "license": "MIT",
   "repository": {

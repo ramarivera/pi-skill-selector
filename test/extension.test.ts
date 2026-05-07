@@ -133,9 +133,12 @@ test("renders a concise skill picker preview with clean ellipsis and tab hint", 
   const preview = formatSkillPickerPreview(skills, "rocket", 72);
   const visible = preview.map(stripAnsi);
 
-  expect(visible).toContain("│ › rocket-extension  Pi-only workflow for shipping a locally… │");
-  expect(visible.at(-1)).toBe("╰─ tab/enter select · ↑↓ move · esc close ─────────────────────╯");
-  expectEveryLineVisibleWidth(preview, 64);
+  expect(visible).toContain("│ Search                                                 │");
+  expect(visible).toContain("│ > rocket                                               │");
+  expect(visible).toContain("│ › rocket-extension                                     │");
+  expect(visible).toContain("│ Pi-only workflow for shipping a locally developed Pi … │");
+  expect(visible.at(-1)).toBe("╰─ tab/enter select · ↑↓ move · esc ─────────────────────╯");
+  expectEveryLineVisibleWidth(preview, 58);
 });
 
 test("keeps panel width stable with OSC links, emoji, CJK, and narrow widths", () => {

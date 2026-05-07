@@ -29,9 +29,7 @@ export type SkillEntry = {
 
 const MAX_VISIBLE_SKILLS = 8;
 const PANEL_MIN_WIDTH = 44;
-const PANEL_MAX_WIDTH = 64;
-const SKILL_NAME_MIN_WIDTH = 18;
-const SKILL_NAME_MAX_WIDTH = 28;
+const PANEL_MAX_WIDTH = 58;
 
 type SkillPickerPanelOptions = {
   width: number;
@@ -203,23 +201,16 @@ function clamp(value: number, min: number, max: number): number {
 
 function formatSkillRow(skill: SkillEntry, width: number, selected: boolean, theme: PickerTheme): string {
   const prefix = selected ? theme.fg("accent", "› ") : "  ";
-  const prefixWidth = visibleWidth(prefix);
-  const gap = "  ";
-  const available = Math.max(width - prefixWidth, 1);
-  const nameColumn = clamp(
-    visibleWidth(skill.name) + visibleWidth(gap),
-    Math.min(SKILL_NAME_MIN_WIDTH, available),
-    Math.min(SKILL_NAME_MAX_WIDTH, available),
-  );
-  const nameWidth = Math.max(nameColumn - visibleWidth(gap), 1);
+  const nameWidth = Math.max(width - visibleWidth(prefix), 1);
   const rawName = fitVisible(skill.name, nameWidth);
   const name = selected ? theme.fg("accent", theme.bold(rawName)) : rawName;
-  const namePadding = " ".repeat(Math.max(nameColumn - visibleWidth(rawName), 1));
-  const descWidth = Math.max(available - nameColumn, 0);
-  const rawDescription = fitVisible(skill.description || skill.source, descWidth);
-  const description = rawDescription ? theme.fg(selected ? "dim" : "muted", rawDescription) : "";
+  return `${prefix}${name}`;
+}
 
-  return `${prefix}${name}${namePadding}${description}`;
+function formatSelectedSkillDescription(skill: SkillEntry | undefined, width: number, theme: PickerTheme): string[] {
+  if (!skill) return [];
+  const description = skill.description || skill.source;
+  return ["", theme.fg("dim", fitVisible(description, width))];
 }
 
 function formatSkillRows(skills: SkillEntry[], selectedIndex: number, width: number, theme: PickerTheme): string[] {
@@ -240,6 +231,7 @@ function formatSkillRows(skills: SkillEntry[], selectedIndex: number, width: num
     rows.push(theme.fg("dim", `  ${normalizedSelectedIndex + 1}/${skills.length}`));
   }
 
+  rows.push(...formatSelectedSkillDescription(skills[normalizedSelectedIndex], width, theme));
   return rows;
 }
 
@@ -252,14 +244,14 @@ export function formatSkillPickerPreview(skills: SkillEntry[], query: string, wi
   const panelWidth = clamp(Math.floor(width), PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
   const bodyWidth = Math.max(panelWidth - 4, 1);
   const queryLabel = query ? `matching "${query}"` : "type to filter";
-  const body = [`filter  ${query || "…"}`, "", ...formatSkillRows(filtered, selectedIndex, bodyWidth, theme)].map((line) => truncateToWidth(line, bodyWidth, ""));
+  const body = ["Search", `> ${query}`, "", ...formatSkillRows(filtered, selectedIndex, bodyWidth, theme)].map((line) => truncateToWidth(line, bodyWidth, ""));
 
   return formatSkillPickerPanel({
     width: panelWidth,
-    title: "Skill Selection",
-    subtitle: `${filtered.length}/${skills.length} skills · ${queryLabel}`,
+    title: "Skills",
+    subtitle: `${filtered.length}/${skills.length} · ${queryLabel}`,
     body,
-    footer: "tab/enter select · ↑↓ move · esc close",
+    footer: "tab/enter select · ↑↓ move · esc",
     styleSurface: (text) => text,
     styleBorder: (text) => text,
     styleAccentBorder: (text) => text,
@@ -300,17 +292,18 @@ class SkillPickerComponent implements Component, Focusable {
     const bodyWidth = Math.max(panelWidth - 4, 1);
     const queryLabel = this.query ? `matching "${this.query}"` : "type to filter";
     const body = [
-      this.theme.fg("dim", `filter  ${this.query || "…"}`),
+      this.theme.fg("dim", "Search"),
+      ...this.input.render(bodyWidth),
       "",
       ...formatSkillRows(this.filtered, this.selectedIndex, bodyWidth, this.theme),
     ].map((line) => truncateToWidth(line, bodyWidth, ""));
 
     return formatSkillPickerPanel({
       width: panelWidth,
-      title: "Skill Selection",
-      subtitle: `${this.filtered.length}/${this.skills.length} skills · ${queryLabel}`,
+      title: "Skills",
+      subtitle: `${this.filtered.length}/${this.skills.length} · ${queryLabel}`,
       body,
-      footer: "tab/enter select · ↑↓ move · esc close",
+      footer: "tab/enter select · ↑↓ move · esc",
       styleSurface: (text) => text,
       styleBorder: (text) => this.theme.fg("borderMuted", text),
       styleAccentBorder: (text) => this.theme.fg("borderMuted", text),
