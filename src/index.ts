@@ -8,12 +8,10 @@ import {
   Input,
   Key,
   matchesKey,
-  SelectList,
   truncateToWidth,
   visibleWidth,
   type Component,
   type Focusable,
-  type SelectItem,
 } from "@mariozechner/pi-tui";
 
 type SkillPickerResult = string | null;
@@ -29,8 +27,11 @@ export type SkillEntry = {
   source: "pi-user" | "agents-user" | "pi-project" | "agents-project";
 };
 
-const MAX_VISIBLE_SKILLS = 12;
-const PANEL_MIN_WIDTH = 24;
+const MAX_VISIBLE_SKILLS = 8;
+const PANEL_MIN_WIDTH = 44;
+const PANEL_MAX_WIDTH = 64;
+const SKILL_NAME_MIN_WIDTH = 18;
+const SKILL_NAME_MAX_WIDTH = 28;
 
 type SkillPickerPanelOptions = {
   width: number;
@@ -192,19 +193,86 @@ export function skillPromptInsertion(skillName: string): string {
   return `/skill:${skillName} `;
 }
 
-function toSelectItem(skill: SkillEntry): SelectItem {
-  return {
-    value: skill.name,
-    label: skill.name,
-    description: skill.description || skill.source,
+export function isSkillPickerConfirmKey(data: string): boolean {
+  return matchesKey(data, Key.enter) || matchesKey(data, Key.tab);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(value, max));
+}
+
+function formatSkillRow(skill: SkillEntry, width: number, selected: boolean, theme: PickerTheme): string {
+  const prefix = selected ? theme.fg("accent", "› ") : "  ";
+  const prefixWidth = visibleWidth(prefix);
+  const gap = "  ";
+  const available = Math.max(width - prefixWidth, 1);
+  const nameColumn = clamp(
+    visibleWidth(skill.name) + visibleWidth(gap),
+    Math.min(SKILL_NAME_MIN_WIDTH, available),
+    Math.min(SKILL_NAME_MAX_WIDTH, available),
+  );
+  const nameWidth = Math.max(nameColumn - visibleWidth(gap), 1);
+  const rawName = fitVisible(skill.name, nameWidth);
+  const name = selected ? theme.fg("accent", theme.bold(rawName)) : rawName;
+  const namePadding = " ".repeat(Math.max(nameColumn - visibleWidth(rawName), 1));
+  const descWidth = Math.max(available - nameColumn, 0);
+  const rawDescription = fitVisible(skill.description || skill.source, descWidth);
+  const description = rawDescription ? theme.fg(selected ? "dim" : "muted", rawDescription) : "";
+
+  return `${prefix}${name}${namePadding}${description}`;
+}
+
+function formatSkillRows(skills: SkillEntry[], selectedIndex: number, width: number, theme: PickerTheme): string[] {
+  if (skills.length === 0) {
+    return [theme.fg("warning", "  No matching skills")];
+  }
+
+  const visibleCount = Math.min(skills.length, MAX_VISIBLE_SKILLS);
+  const normalizedSelectedIndex = clamp(selectedIndex, 0, skills.length - 1);
+  const startIndex = clamp(normalizedSelectedIndex - Math.floor(visibleCount / 2), 0, Math.max(skills.length - visibleCount, 0));
+  const endIndex = Math.min(startIndex + visibleCount, skills.length);
+  const rows = skills.slice(startIndex, endIndex).map((skill, offset) => {
+    const index = startIndex + offset;
+    return formatSkillRow(skill, width, index === normalizedSelectedIndex, theme);
+  });
+
+  if (skills.length > visibleCount) {
+    rows.push(theme.fg("dim", `  ${normalizedSelectedIndex + 1}/${skills.length}`));
+  }
+
+  return rows;
+}
+
+export function formatSkillPickerPreview(skills: SkillEntry[], query: string, width = PANEL_MAX_WIDTH, selectedIndex = 0): string[] {
+  const theme: PickerTheme = {
+    bold: (text) => text,
+    fg: (_color, text) => text,
   };
+  const filtered = filterSkills(skills, query);
+  const panelWidth = clamp(Math.floor(width), PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
+  const bodyWidth = Math.max(panelWidth - 4, 1);
+  const queryLabel = query ? `matching "${query}"` : "type to filter";
+  const body = [`filter  ${query || "…"}`, "", ...formatSkillRows(filtered, selectedIndex, bodyWidth, theme)].map((line) => truncateToWidth(line, bodyWidth, ""));
+
+  return formatSkillPickerPanel({
+    width: panelWidth,
+    title: "Skill Selection",
+    subtitle: `${filtered.length}/${skills.length} skills · ${queryLabel}`,
+    body,
+    footer: "tab/enter select · ↑↓ move · esc close",
+    styleSurface: (text) => text,
+    styleBorder: (text) => text,
+    styleAccentBorder: (text) => text,
+    styleTitle: (text) => text,
+    styleMuted: (text) => text,
+  });
 }
 
 class SkillPickerComponent implements Component, Focusable {
   private readonly input = new Input();
-  private list: SelectList;
   private query: string;
   private filtered: SkillEntry[];
+  private selectedIndex = 0;
   private _focused = false;
 
   constructor(
@@ -216,7 +284,6 @@ class SkillPickerComponent implements Component, Focusable {
     this.query = initialQuery;
     this.input.setValue(initialQuery);
     this.filtered = filterSkills(skills, initialQuery);
-    this.list = this.createList();
   }
 
   get focused() {
@@ -229,25 +296,24 @@ class SkillPickerComponent implements Component, Focusable {
   }
 
   render(width: number): string[] {
-    const panelWidth = Math.max(width, PANEL_MIN_WIDTH);
+    const panelWidth = clamp(Math.floor(width), PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
     const bodyWidth = Math.max(panelWidth - 4, 1);
-    const queryLabel = this.query ? `matching "${this.query}"` : "ready to search";
+    const queryLabel = this.query ? `matching "${this.query}"` : "type to filter";
     const body = [
-      this.theme.fg("dim", "Filter"),
-      ...this.input.render(bodyWidth),
+      this.theme.fg("dim", `filter  ${this.query || "…"}`),
       "",
-      ...this.list.render(bodyWidth),
+      ...formatSkillRows(this.filtered, this.selectedIndex, bodyWidth, this.theme),
     ].map((line) => truncateToWidth(line, bodyWidth, ""));
 
     return formatSkillPickerPanel({
       width: panelWidth,
-      title: "Skill Selector",
+      title: "Skill Selection",
       subtitle: `${this.filtered.length}/${this.skills.length} skills · ${queryLabel}`,
       body,
-      footer: "↑↓ navigate · enter select · esc cancel",
+      footer: "tab/enter select · ↑↓ move · esc close",
       styleSurface: (text) => text,
       styleBorder: (text) => this.theme.fg("borderMuted", text),
-      styleAccentBorder: (text) => this.theme.fg("borderAccent", text),
+      styleAccentBorder: (text) => this.theme.fg("borderMuted", text),
       styleTitle: (text) => this.theme.fg("accent", this.theme.bold(text)),
       styleMuted: (text) => this.theme.fg("dim", text),
     });
@@ -259,8 +325,18 @@ class SkillPickerComponent implements Component, Focusable {
       return;
     }
 
-    if (matchesKey(data, Key.up) || matchesKey(data, Key.down) || matchesKey(data, Key.enter)) {
-      this.list.handleInput(data);
+    if (matchesKey(data, Key.up)) {
+      this.moveSelection(-1);
+      return;
+    }
+
+    if (matchesKey(data, Key.down)) {
+      this.moveSelection(1);
+      return;
+    }
+
+    if (isSkillPickerConfirmKey(data)) {
+      this.selectCurrentSkill();
       return;
     }
 
@@ -269,32 +345,22 @@ class SkillPickerComponent implements Component, Focusable {
     if (nextQuery !== this.query) {
       this.query = nextQuery;
       this.filtered = filterSkills(this.skills, this.query);
-      this.list = this.createList();
+      this.selectedIndex = 0;
     }
   }
 
   invalidate(): void {
     this.input.invalidate();
-    this.list.invalidate();
   }
 
-  private createList(): SelectList {
-    const list = new SelectList(
-      this.filtered.map(toSelectItem),
-      Math.min(Math.max(this.filtered.length, 1), MAX_VISIBLE_SKILLS),
-      {
-        selectedPrefix: (text) => this.theme.fg("accent", text),
-        selectedText: (text) => this.theme.fg("accent", text),
-        description: (text) => this.theme.fg("muted", text),
-        scrollInfo: (text) => this.theme.fg("dim", text),
-        noMatch: (text) => this.theme.fg("warning", text),
-      },
-      { minPrimaryColumnWidth: 24, maxPrimaryColumnWidth: 42 },
-    );
+  private moveSelection(delta: number): void {
+    if (this.filtered.length === 0) return;
+    this.selectedIndex = (this.selectedIndex + delta + this.filtered.length) % this.filtered.length;
+  }
 
-    list.onSelect = (item) => this.done(item.value);
-    list.onCancel = () => this.done(null);
-    return list;
+  private selectCurrentSkill(): void {
+    const skill = this.filtered[this.selectedIndex];
+    if (skill) this.done(skill.name);
   }
 }
 
@@ -310,10 +376,9 @@ async function pickSkill(ctx: ExtensionContext, initialQuery = ""): Promise<Skil
     {
       overlay: true,
       overlayOptions: {
-        anchor: "bottom-left",
-        width: "80%",
-        maxHeight: "70%",
-        margin: 1,
+        anchor: "center",
+        width: PANEL_MAX_WIDTH,
+        maxHeight: 18,
       },
     },
   );

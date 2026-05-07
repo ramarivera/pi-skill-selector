@@ -6,7 +6,16 @@ import { expect, test } from "bun:test";
 import { createAgentSession, DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
 import { visibleWidth } from "@mariozechner/pi-tui";
 
-import extension, { discoverSkills, filterSkills, formatSkillPickerPanel, skillPromptInsertion } from "../src/index.ts";
+import extension, {
+  discoverSkills,
+  filterSkills,
+  formatSkillPickerPanel,
+  formatSkillPickerPreview,
+  isSkillPickerConfirmKey,
+  skillPromptInsertion,
+} from "../src/index.ts";
+
+const PRETTY_PANEL_MIN_WIDTH = 44;
 
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const OSC_PATTERN = /\u001b\].*?(?:\u0007|\u001b\\)/g;
@@ -58,6 +67,12 @@ test("inserts skill commands in Pi's built-in skill expansion format", () => {
   expect(skillPromptInsertion("21st-sdk")).toBe("/skill:21st-sdk ");
 });
 
+test("treats tab as a picker confirm key like enter", () => {
+  expect(isSkillPickerConfirmKey("\t")).toBe(true);
+  expect(isSkillPickerConfirmKey("\r")).toBe(true);
+  expect(isSkillPickerConfirmKey("a")).toBe(false);
+});
+
 test("formats the skill picker as a bordered panel", () => {
   const panel = formatSkillPickerPanel({
     width: 36,
@@ -72,11 +87,11 @@ test("formats the skill picker as a bordered panel", () => {
     styleMuted: (text) => text,
   });
 
-  expect(panel[0]).toBe("╭─ Skill Selector ─────────────────╮");
-  expect(panel[1]).toBe("│ 3 skills · matching \"git\"        │");
-  expect(panel[2]).toBe("├──────────────────────────────────┤");
-  expect(panel.at(-1)).toBe("╰─ ↑↓ navigate · enter select ─────╯");
-  expectEveryLineVisibleWidth(panel, 36);
+  expect(panel[0]).toBe("╭─ Skill Selector ─────────────────────────╮");
+  expect(panel[1]).toBe("│ 3 skills · matching \"git\"                │");
+  expect(panel[2]).toBe("├──────────────────────────────────────────┤");
+  expect(panel.at(-1)).toBe("╰─ ↑↓ navigate · enter select ─────────────╯");
+  expectEveryLineVisibleWidth(panel, PRETTY_PANEL_MIN_WIDTH);
 });
 
 test("keeps the bordered panel aligned when theme styles add ANSI escapes", () => {
@@ -94,10 +109,33 @@ test("keeps the bordered panel aligned when theme styles add ANSI escapes", () =
   });
   const visible = panel.map(stripAnsi);
 
-  expect(visible[0]).toBe("╭─ Skill Selector ─────────────────╮");
-  expect(visible[1]).toBe("│ 3 skills · matching \"git\"        │");
-  expect(visible.at(-1)).toBe("╰─ ↑↓ navigate · enter select ─────╯");
-  expectEveryLineVisibleWidth(panel, 36);
+  expect(visible[0]).toBe("╭─ Skill Selector ─────────────────────────╮");
+  expect(visible[1]).toBe("│ 3 skills · matching \"git\"                │");
+  expect(visible.at(-1)).toBe("╰─ ↑↓ navigate · enter select ─────────────╯");
+  expectEveryLineVisibleWidth(panel, PRETTY_PANEL_MIN_WIDTH);
+});
+
+test("renders a concise skill picker preview with clean ellipsis and tab hint", () => {
+  const skills = [
+    {
+      name: "rocket-extension",
+      description: "Pi-only workflow for shipping a locally developed Pi extension end to end without running chezmoi",
+      filePath: "/tmp/rocket/SKILL.md",
+      source: "pi-user" as const,
+    },
+    {
+      name: "session-handoff",
+      description: "Continue work from another agent session",
+      filePath: "/tmp/handoff/SKILL.md",
+      source: "pi-user" as const,
+    },
+  ];
+  const preview = formatSkillPickerPreview(skills, "rocket", 72);
+  const visible = preview.map(stripAnsi);
+
+  expect(visible).toContain("│ › rocket-extension  Pi-only workflow for shipping a locally… │");
+  expect(visible.at(-1)).toBe("╰─ tab/enter select · ↑↓ move · esc close ─────────────────────╯");
+  expectEveryLineVisibleWidth(preview, 64);
 });
 
 test("keeps panel width stable with OSC links, emoji, CJK, and narrow widths", () => {
@@ -116,11 +154,11 @@ test("keeps panel width stable with OSC links, emoji, CJK, and narrow widths", (
   });
   const visible = panel.map(stripAnsi);
 
-  expect(visible[0]).toBe("╭─ Skill ✨ Selector ──────╮");
-  expect(visible[1]).toBe("│ 12 skills · matching \"…  │");
-  expect(visible[4]).toBe("│ レビュー                 │");
-  expect(visible.at(-1)).toBe("╰─ ↑↓ · enter · esc ───────╯");
-  expectEveryLineVisibleWidth(panel, 28);
+  expect(visible[0]).toBe("╭─ Skill ✨ Selector ──────────────────────╮");
+  expect(visible[1]).toBe("│ 12 skills · matching \"レビュー\"          │");
+  expect(visible[4]).toBe("│ レビュー                                 │");
+  expect(visible.at(-1)).toBe("╰─ ↑↓ · enter · esc ───────────────────────╯");
+  expectEveryLineVisibleWidth(panel, PRETTY_PANEL_MIN_WIDTH);
 });
 
 test("Pi SDK discovers the local .pi extension shim without loader errors", async () => {
