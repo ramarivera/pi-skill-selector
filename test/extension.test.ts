@@ -7,6 +7,12 @@ import { createAgentSession, DefaultResourceLoader, SessionManager } from "@mari
 
 import extension, { discoverSkills, filterSkills, formatSkillPickerPanel, skillPromptInsertion } from "../src/index.ts";
 
+const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_PATTERN, "");
+}
+
 function writeSkill(root: string, dirName: string, name: string, description: string) {
   const dir = join(root, dirName);
   mkdirSync(dir, { recursive: true });
@@ -63,6 +69,25 @@ test("formats the skill picker as a bordered panel", () => {
   expect(panel[2]).toBe("├──────────────────────────────────┤");
   expect(panel.at(-1)).toBe("╰─ ↑↓ navigate · enter select ─────╯");
   expect(panel.every((line) => line.length === 36)).toBe(true);
+});
+
+test("keeps the bordered panel aligned when theme styles add ANSI escapes", () => {
+  const panel = formatSkillPickerPanel({
+    width: 36,
+    title: "Skill Selector",
+    subtitle: "3 skills · matching \"git\"",
+    body: ["Filter", "\u001b[35m> git\u001b[0m", "", "\u001b[2mgithub-pr  Pull requests\u001b[0m"],
+    footer: "↑↓ navigate · enter select",
+    styleBorder: (text) => `\u001b[90m${text}\u001b[0m`,
+    styleTitle: (text) => `\u001b[35;1m${text}\u001b[0m`,
+    styleMuted: (text) => `\u001b[2m${text}\u001b[0m`,
+  });
+  const visible = panel.map(stripAnsi);
+
+  expect(visible[0]).toBe("╭─ Skill Selector ─────────────────╮");
+  expect(visible[1]).toBe("│ 3 skills · matching \"git\"        │");
+  expect(visible.at(-1)).toBe("╰─ ↑↓ navigate · enter select ─────╯");
+  expect(visible.every((line) => line.length === 36)).toBe(true);
 });
 
 test("Pi SDK discovers the local .pi extension shim without loader errors", async () => {

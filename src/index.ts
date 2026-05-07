@@ -42,33 +42,53 @@ type SkillPickerPanelOptions = {
   styleMuted: (text: string) => string;
 };
 
+const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_PATTERN, "");
+}
+
+function visibleLength(text: string): number {
+  return stripAnsi(text).length;
+}
+
 function plainTruncate(text: string, width: number): string {
   if (text.length <= width) return text;
   if (width <= 1) return text.slice(0, Math.max(width, 0));
   return `${text.slice(0, width - 1)}…`;
 }
 
-function panelBorderLine(left: string, label: string, right: string, width: number): string {
+function panelBorderLine(
+  left: string,
+  label: string,
+  right: string,
+  width: number,
+  styleBorder: (text: string) => string,
+  styleLabel: (text: string) => string,
+): string {
   const safeLabel = plainTruncate(label, Math.max(width - 6, 0));
-  const prefix = safeLabel ? `${left}─ ${safeLabel} ` : `${left}─`;
-  const fill = "─".repeat(Math.max(width - prefix.length - right.length, 0));
-  return `${prefix}${fill}${right}`;
+  if (!safeLabel) return styleBorder(`${left}${"─".repeat(Math.max(width - 2, 0))}${right}`);
+
+  const prefix = `${left}─ `;
+  const suffix = ` ${"─".repeat(Math.max(width - prefix.length - safeLabel.length - right.length - 1, 0))}${right}`;
+  return `${styleBorder(prefix)}${styleLabel(safeLabel)}${styleBorder(suffix)}`;
 }
 
-function panelRow(content: string, width: number): string {
+function panelRow(content: string, width: number, styleBorder: (text: string) => string, styleContent: (text: string) => string): string {
   const innerWidth = Math.max(width - 4, 0);
-  const visible = plainTruncate(content, innerWidth);
-  return `│ ${visible.padEnd(innerWidth, " ")} │`;
+  const visible = truncateToWidth(content, innerWidth, "");
+  const padding = " ".repeat(Math.max(innerWidth - visibleLength(visible), 0));
+  return `${styleBorder("│ ")}${styleContent(visible)}${padding}${styleBorder(" │")}`;
 }
 
 export function formatSkillPickerPanel(options: SkillPickerPanelOptions): string[] {
   const width = Math.max(Math.floor(options.width), PANEL_MIN_WIDTH);
   const rows = [
-    options.styleBorder(panelBorderLine("╭", options.styleTitle(options.title), "╮", width)),
-    options.styleBorder(panelRow(options.styleMuted(options.subtitle), width)),
-    options.styleBorder(panelBorderLine("├", "", "┤", width)),
-    ...options.body.map((line) => options.styleBorder(panelRow(line, width))),
-    options.styleBorder(panelBorderLine("╰", options.styleMuted(options.footer), "╯", width)),
+    panelBorderLine("╭", options.title, "╮", width, options.styleBorder, options.styleTitle),
+    panelRow(options.subtitle, width, options.styleBorder, options.styleMuted),
+    panelBorderLine("├", "", "┤", width, options.styleBorder, options.styleBorder),
+    ...options.body.map((line) => panelRow(line, width, options.styleBorder, (text) => text)),
+    panelBorderLine("╰", options.footer, "╯", width, options.styleBorder, options.styleMuted),
   ];
 
   return rows;
