@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { createAgentSession, DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
 
-import extension, { discoverSkills, filterSkills, skillPromptInsertion } from "../src/index.ts";
+import extension, { discoverSkills, filterSkills, formatSkillPickerPanel, skillPromptInsertion } from "../src/index.ts";
 
 function writeSkill(root: string, dirName: string, name: string, description: string) {
   const dir = join(root, dirName);
@@ -44,6 +44,25 @@ test("filters skills fuzzily across name and description", () => {
 
 test("inserts skill commands in Pi's built-in skill expansion format", () => {
   expect(skillPromptInsertion("21st-sdk")).toBe("/skill:21st-sdk ");
+});
+
+test("formats the skill picker as a bordered panel", () => {
+  const panel = formatSkillPickerPanel({
+    width: 36,
+    title: "Skill Selector",
+    subtitle: "3 skills · matching \"git\"",
+    body: ["Filter", "> git", "", "github-pr  Pull requests"],
+    footer: "↑↓ navigate · enter select",
+    styleBorder: (text) => text,
+    styleTitle: (text) => text,
+    styleMuted: (text) => text,
+  });
+
+  expect(panel[0]).toBe("╭─ Skill Selector ─────────────────╮");
+  expect(panel[1]).toBe("│ 3 skills · matching \"git\"        │");
+  expect(panel[2]).toBe("├──────────────────────────────────┤");
+  expect(panel.at(-1)).toBe("╰─ ↑↓ navigate · enter select ─────╯");
+  expect(panel.every((line) => line.length === 36)).toBe(true);
 });
 
 test("Pi SDK discovers the local .pi extension shim without loader errors", async () => {

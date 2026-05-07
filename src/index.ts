@@ -29,6 +29,50 @@ export type SkillEntry = {
 };
 
 const MAX_VISIBLE_SKILLS = 12;
+const PANEL_MIN_WIDTH = 24;
+
+type SkillPickerPanelOptions = {
+  width: number;
+  title: string;
+  subtitle: string;
+  body: string[];
+  footer: string;
+  styleBorder: (text: string) => string;
+  styleTitle: (text: string) => string;
+  styleMuted: (text: string) => string;
+};
+
+function plainTruncate(text: string, width: number): string {
+  if (text.length <= width) return text;
+  if (width <= 1) return text.slice(0, Math.max(width, 0));
+  return `${text.slice(0, width - 1)}…`;
+}
+
+function panelBorderLine(left: string, label: string, right: string, width: number): string {
+  const safeLabel = plainTruncate(label, Math.max(width - 6, 0));
+  const prefix = safeLabel ? `${left}─ ${safeLabel} ` : `${left}─`;
+  const fill = "─".repeat(Math.max(width - prefix.length - right.length, 0));
+  return `${prefix}${fill}${right}`;
+}
+
+function panelRow(content: string, width: number): string {
+  const innerWidth = Math.max(width - 4, 0);
+  const visible = plainTruncate(content, innerWidth);
+  return `│ ${visible.padEnd(innerWidth, " ")} │`;
+}
+
+export function formatSkillPickerPanel(options: SkillPickerPanelOptions): string[] {
+  const width = Math.max(Math.floor(options.width), PANEL_MIN_WIDTH);
+  const rows = [
+    options.styleBorder(panelBorderLine("╭", options.styleTitle(options.title), "╮", width)),
+    options.styleBorder(panelRow(options.styleMuted(options.subtitle), width)),
+    options.styleBorder(panelBorderLine("├", "", "┤", width)),
+    ...options.body.map((line) => options.styleBorder(panelRow(line, width))),
+    options.styleBorder(panelBorderLine("╰", options.styleMuted(options.footer), "╯", width)),
+  ];
+
+  return rows;
+}
 
 function readFrontmatter(filePath: string): string | null {
   try {
@@ -172,17 +216,26 @@ class SkillPickerComponent implements Component, Focusable {
   }
 
   render(width: number): string[] {
-    const lines = [
-      this.theme.fg("accent", this.theme.bold("Skill Selector")),
-      this.theme.fg("dim", "Type to fuzzy-filter by name or description"),
-      ...this.input.render(width),
+    const panelWidth = Math.max(width, PANEL_MIN_WIDTH);
+    const bodyWidth = Math.max(panelWidth - 4, 1);
+    const queryLabel = this.query ? `matching "${this.query}"` : "ready to search";
+    const body = [
+      this.theme.fg("dim", "Filter"),
+      ...this.input.render(bodyWidth),
       "",
-      ...this.list.render(width),
-      "",
-      this.theme.fg("dim", "↑↓ navigate · enter select · esc cancel"),
-    ];
+      ...this.list.render(bodyWidth),
+    ].map((line) => truncateToWidth(line, bodyWidth, ""));
 
-    return lines.map((line) => truncateToWidth(line, width, ""));
+    return formatSkillPickerPanel({
+      width: panelWidth,
+      title: "Skill Selector",
+      subtitle: `${this.filtered.length}/${this.skills.length} skills · ${queryLabel}`,
+      body,
+      footer: "↑↓ navigate · enter select · esc cancel",
+      styleBorder: (text) => this.theme.fg("muted", text),
+      styleTitle: (text) => this.theme.fg("accent", this.theme.bold(text)),
+      styleMuted: (text) => this.theme.fg("dim", text),
+    }).map((line) => truncateToWidth(line, panelWidth, ""));
   }
 
   handleInput(data: string): void {
