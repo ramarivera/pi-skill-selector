@@ -10,6 +10,7 @@ import {
   matchesKey,
   SelectList,
   truncateToWidth,
+  visibleWidth,
   type Component,
   type Focusable,
   type SelectItem,
@@ -37,25 +38,15 @@ type SkillPickerPanelOptions = {
   subtitle: string;
   body: string[];
   footer: string;
+  styleSurface: (text: string) => string;
   styleBorder: (text: string) => string;
+  styleAccentBorder: (text: string) => string;
   styleTitle: (text: string) => string;
   styleMuted: (text: string) => string;
 };
 
-const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
-
-function stripAnsi(text: string): string {
-  return text.replace(ANSI_PATTERN, "");
-}
-
-function visibleLength(text: string): number {
-  return stripAnsi(text).length;
-}
-
-function plainTruncate(text: string, width: number): string {
-  if (text.length <= width) return text;
-  if (width <= 1) return text.slice(0, Math.max(width, 0));
-  return `${text.slice(0, width - 1)}…`;
+function fitVisible(text: string, width: number): string {
+  return truncateToWidth(text, Math.max(width, 0), "…");
 }
 
 function panelBorderLine(
@@ -66,32 +57,34 @@ function panelBorderLine(
   styleBorder: (text: string) => string,
   styleLabel: (text: string) => string,
 ): string {
-  const safeLabel = plainTruncate(label, Math.max(width - 6, 0));
+  const safeLabel = fitVisible(label, Math.max(width - 6, 0));
   if (!safeLabel) return styleBorder(`${left}${"─".repeat(Math.max(width - 2, 0))}${right}`);
 
   const prefix = `${left}─ `;
-  const suffix = ` ${"─".repeat(Math.max(width - prefix.length - safeLabel.length - right.length - 1, 0))}${right}`;
+  const suffixStart = " ";
+  const fillWidth = Math.max(width - visibleWidth(prefix) - visibleWidth(safeLabel) - visibleWidth(suffixStart) - visibleWidth(right), 0);
+  const suffix = `${suffixStart}${"─".repeat(fillWidth)}${right}`;
   return `${styleBorder(prefix)}${styleLabel(safeLabel)}${styleBorder(suffix)}`;
 }
 
 function panelRow(content: string, width: number, styleBorder: (text: string) => string, styleContent: (text: string) => string): string {
   const innerWidth = Math.max(width - 4, 0);
-  const visible = truncateToWidth(content, innerWidth, "");
-  const padding = " ".repeat(Math.max(innerWidth - visibleLength(visible), 0));
+  const visible = truncateToWidth(content, innerWidth, "…");
+  const padding = " ".repeat(Math.max(innerWidth - visibleWidth(visible), 0));
   return `${styleBorder("│ ")}${styleContent(visible)}${padding}${styleBorder(" │")}`;
 }
 
 export function formatSkillPickerPanel(options: SkillPickerPanelOptions): string[] {
   const width = Math.max(Math.floor(options.width), PANEL_MIN_WIDTH);
   const rows = [
-    panelBorderLine("╭", options.title, "╮", width, options.styleBorder, options.styleTitle),
+    panelBorderLine("╭", options.title, "╮", width, options.styleAccentBorder, options.styleTitle),
     panelRow(options.subtitle, width, options.styleBorder, options.styleMuted),
     panelBorderLine("├", "", "┤", width, options.styleBorder, options.styleBorder),
     ...options.body.map((line) => panelRow(line, width, options.styleBorder, (text) => text)),
-    panelBorderLine("╰", options.footer, "╯", width, options.styleBorder, options.styleMuted),
+    panelBorderLine("╰", options.footer, "╯", width, options.styleAccentBorder, options.styleMuted),
   ];
 
-  return rows;
+  return rows.map(options.styleSurface);
 }
 
 function readFrontmatter(filePath: string): string | null {
@@ -252,10 +245,12 @@ class SkillPickerComponent implements Component, Focusable {
       subtitle: `${this.filtered.length}/${this.skills.length} skills · ${queryLabel}`,
       body,
       footer: "↑↓ navigate · enter select · esc cancel",
-      styleBorder: (text) => this.theme.fg("muted", text),
+      styleSurface: (text) => text,
+      styleBorder: (text) => this.theme.fg("borderMuted", text),
+      styleAccentBorder: (text) => this.theme.fg("borderAccent", text),
       styleTitle: (text) => this.theme.fg("accent", this.theme.bold(text)),
       styleMuted: (text) => this.theme.fg("dim", text),
-    }).map((line) => truncateToWidth(line, panelWidth, ""));
+    });
   }
 
   handleInput(data: string): void {

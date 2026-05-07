@@ -4,13 +4,19 @@ import { join } from "node:path";
 
 import { expect, test } from "bun:test";
 import { createAgentSession, DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
+import { visibleWidth } from "@mariozechner/pi-tui";
 
 import extension, { discoverSkills, filterSkills, formatSkillPickerPanel, skillPromptInsertion } from "../src/index.ts";
 
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+const OSC_PATTERN = /\u001b\].*?(?:\u0007|\u001b\\)/g;
 
 function stripAnsi(text: string): string {
-  return text.replace(ANSI_PATTERN, "");
+  return text.replace(OSC_PATTERN, "").replace(ANSI_PATTERN, "");
+}
+
+function expectEveryLineVisibleWidth(lines: string[], width: number) {
+  expect(lines.map((line) => visibleWidth(line))).toEqual(Array(lines.length).fill(width));
 }
 
 function writeSkill(root: string, dirName: string, name: string, description: string) {
@@ -59,7 +65,9 @@ test("formats the skill picker as a bordered panel", () => {
     subtitle: "3 skills · matching \"git\"",
     body: ["Filter", "> git", "", "github-pr  Pull requests"],
     footer: "↑↓ navigate · enter select",
+    styleSurface: (text) => text,
     styleBorder: (text) => text,
+    styleAccentBorder: (text) => text,
     styleTitle: (text) => text,
     styleMuted: (text) => text,
   });
@@ -68,7 +76,7 @@ test("formats the skill picker as a bordered panel", () => {
   expect(panel[1]).toBe("│ 3 skills · matching \"git\"        │");
   expect(panel[2]).toBe("├──────────────────────────────────┤");
   expect(panel.at(-1)).toBe("╰─ ↑↓ navigate · enter select ─────╯");
-  expect(panel.every((line) => line.length === 36)).toBe(true);
+  expectEveryLineVisibleWidth(panel, 36);
 });
 
 test("keeps the bordered panel aligned when theme styles add ANSI escapes", () => {
@@ -78,7 +86,9 @@ test("keeps the bordered panel aligned when theme styles add ANSI escapes", () =
     subtitle: "3 skills · matching \"git\"",
     body: ["Filter", "\u001b[35m> git\u001b[0m", "", "\u001b[2mgithub-pr  Pull requests\u001b[0m"],
     footer: "↑↓ navigate · enter select",
+    styleSurface: (text) => `\u001b[48;5;236m${text}\u001b[0m`,
     styleBorder: (text) => `\u001b[90m${text}\u001b[0m`,
+    styleAccentBorder: (text) => `\u001b[35m${text}\u001b[0m`,
     styleTitle: (text) => `\u001b[35;1m${text}\u001b[0m`,
     styleMuted: (text) => `\u001b[2m${text}\u001b[0m`,
   });
@@ -87,7 +97,30 @@ test("keeps the bordered panel aligned when theme styles add ANSI escapes", () =
   expect(visible[0]).toBe("╭─ Skill Selector ─────────────────╮");
   expect(visible[1]).toBe("│ 3 skills · matching \"git\"        │");
   expect(visible.at(-1)).toBe("╰─ ↑↓ navigate · enter select ─────╯");
-  expect(visible.every((line) => line.length === 36)).toBe(true);
+  expectEveryLineVisibleWidth(panel, 36);
+});
+
+test("keeps panel width stable with OSC links, emoji, CJK, and narrow widths", () => {
+  const linkedSkill = "\u001b]8;;https://example.com\u001b\\github-pr\u001b]8;;\u001b\\  handles 🔥 PR レビュー";
+  const panel = formatSkillPickerPanel({
+    width: 28,
+    title: "Skill ✨ Selector",
+    subtitle: "12 skills · matching \"レビュー\"",
+    body: ["Filter", "レビュー", linkedSkill],
+    footer: "↑↓ · enter · esc",
+    styleSurface: (text) => `\u001b[48;5;236m${text}\u001b[0m`,
+    styleBorder: (text) => `\u001b[90m${text}\u001b[0m`,
+    styleAccentBorder: (text) => `\u001b[38;5;176m${text}\u001b[0m`,
+    styleTitle: (text) => `\u001b[35;1m${text}\u001b[0m`,
+    styleMuted: (text) => `\u001b[2m${text}\u001b[0m`,
+  });
+  const visible = panel.map(stripAnsi);
+
+  expect(visible[0]).toBe("╭─ Skill ✨ Selector ──────╮");
+  expect(visible[1]).toBe("│ 12 skills · matching \"…  │");
+  expect(visible[4]).toBe("│ レビュー                 │");
+  expect(visible.at(-1)).toBe("╰─ ↑↓ · enter · esc ───────╯");
+  expectEveryLineVisibleWidth(panel, 28);
 });
 
 test("Pi SDK discovers the local .pi extension shim without loader errors", async () => {
