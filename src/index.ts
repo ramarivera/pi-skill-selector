@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-import { type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   fuzzyFilter,
   Input,
@@ -12,7 +12,7 @@ import {
   visibleWidth,
   type Component,
   type Focusable,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 
 type SkillPickerResult = string | null;
 type PickerTheme = {
