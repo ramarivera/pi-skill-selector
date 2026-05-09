@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "strategy_options": {
+    "checkpoint_remote": {
+      "provider": "github",
+      "repo": "ramarivera/pi-skill-selector-entire-history"
+    }
+  },
+  "external_agents": true
+}
