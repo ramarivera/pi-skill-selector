@@ -1,0 +1,12 @@
+╭─ Skills ───────────────────────────────────────────────╮
+│ 3/4 · matching "rocket"                                │
+├────────────────────────────────────────────────────────┤
+│ Search                                                 │
+│ > rocket                                               │
+│                                                        │
+│ › rocket-extension                                     │
+│   openclaw-skill-vetter                                │
+│   skill-creator                                        │
+│                                                        │
+│ Pi-only workflow for shipping a locally developed Pi … │
+╰─ tab/enter select · ↑↓ move · esc ─────────────────────╯

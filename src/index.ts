@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
   fuzzyFilter,
   Input,
@@ -12,12 +12,18 @@ import {
   visibleWidth,
   type Component,
   type Focusable,
-} from "@earendil-works/pi-tui";
+} from "@mariozechner/pi-tui";
 
 type SkillPickerResult = string | null;
+type PickerThemeBg = "selectedBg" | "userMessageBg" | "customMessageBg" | "toolPendingBg" | "toolSuccessBg" | "toolErrorBg";
+type Rgb = { r: number; g: number; b: number };
+
 type PickerTheme = {
   bold(text: string): string;
   fg(color: string, text: string): string;
+  bg?(color: PickerThemeBg, text: string): string;
+  getBgAnsi?(color: PickerThemeBg): string;
+  getColorMode?(): "truecolor" | "256color";
 };
 
 export type SkillEntry = {
@@ -46,6 +52,45 @@ type SkillPickerPanelOptions = {
 
 function fitVisible(text: string, width: number): string {
   return truncateToWidth(text, Math.max(width, 0), "…");
+}
+
+function parseTruecolorBg(ansi: string | undefined): Rgb | null {
+  const match = ansi?.match(/\u001b\[48;2;(\d+);(\d+);(\d+)m/);
+  if (!match) return null;
+  return { r: Number(match[1]), g: Number(match[2]), b: Number(match[3]) };
+}
+
+function luminance(color: Rgb): number {
+  return (0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b) / 255;
+}
+
+function mixRgb(from: Rgb, to: Rgb, amount: number): Rgb {
+  return {
+    r: Math.round(from.r + (to.r - from.r) * amount),
+    g: Math.round(from.g + (to.g - from.g) * amount),
+    b: Math.round(from.b + (to.b - from.b) * amount),
+  };
+}
+
+function truecolorFg(color: Rgb, text: string): string {
+  return `\u001b[38;2;${color.r};${color.g};${color.b}m${text}\u001b[39m`;
+}
+
+function safeBg(theme: PickerTheme, color: PickerThemeBg, text: string): string {
+  try {
+    return theme.bg?.(color, text) ?? text;
+  } catch {
+    return text;
+  }
+}
+
+function cardBorderStyle(theme: PickerTheme, surface: PickerThemeBg): (text: string) => string {
+  const surfaceRgb = theme.getColorMode?.() === "truecolor" ? parseTruecolorBg(theme.getBgAnsi?.(surface)) : null;
+  if (!surfaceRgb) return (text) => theme.fg("border", text);
+
+  const target = luminance(surfaceRgb) > 0.55 ? { r: 0, g: 0, b: 0 } : { r: 255, g: 255, b: 255 };
+  const border = mixRgb(surfaceRgb, target, 0.45);
+  return (text) => truecolorFg(border, text);
 }
 
 function panelBorderLine(
@@ -199,12 +244,17 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(value, max));
 }
 
+function padVisible(text: string, width: number): string {
+  return `${text}${" ".repeat(Math.max(width - visibleWidth(text), 0))}`;
+}
+
 function formatSkillRow(skill: SkillEntry, width: number, selected: boolean, theme: PickerTheme): string {
   const prefix = selected ? theme.fg("accent", "› ") : "  ";
   const nameWidth = Math.max(width - visibleWidth(prefix), 1);
   const rawName = fitVisible(skill.name, nameWidth);
   const name = selected ? theme.fg("accent", theme.bold(rawName)) : rawName;
-  return `${prefix}${name}`;
+  const row = padVisible(`${prefix}${name}`, width);
+  return selected && theme.bg ? theme.bg("selectedBg", row) : row;
 }
 
 function formatSelectedSkillDescription(skill: SkillEntry | undefined, width: number, theme: PickerTheme): string[] {
@@ -235,16 +285,23 @@ function formatSkillRows(skills: SkillEntry[], selectedIndex: number, width: num
   return rows;
 }
 
-export function formatSkillPickerPreview(skills: SkillEntry[], query: string, width = PANEL_MAX_WIDTH, selectedIndex = 0): string[] {
-  const theme: PickerTheme = {
+function plainPickerTheme(): PickerTheme {
+  return {
     bold: (text) => text,
     fg: (_color, text) => text,
+    bg: (_color, text) => text,
+    getColorMode: () => "256color",
   };
+}
+
+function formatSkillPickerCard(skills: SkillEntry[], query: string, width: number, selectedIndex: number, theme: PickerTheme, styled: boolean): string[] {
   const filtered = filterSkills(skills, query);
   const panelWidth = clamp(Math.floor(width), PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
   const bodyWidth = Math.max(panelWidth - 4, 1);
   const queryLabel = query ? `matching "${query}"` : "type to filter";
   const body = ["Search", `> ${query}`, "", ...formatSkillRows(filtered, selectedIndex, bodyWidth, theme)].map((line) => truncateToWidth(line, bodyWidth, ""));
+  const cardSurface: PickerThemeBg = "toolPendingBg";
+  const styleCardBorder = styled ? cardBorderStyle(theme, cardSurface) : (text: string) => text;
 
   return formatSkillPickerPanel({
     width: panelWidth,
@@ -252,12 +309,16 @@ export function formatSkillPickerPreview(skills: SkillEntry[], query: string, wi
     subtitle: `${filtered.length}/${skills.length} · ${queryLabel}`,
     body,
     footer: "tab/enter select · ↑↓ move · esc",
-    styleSurface: (text) => text,
-    styleBorder: (text) => text,
-    styleAccentBorder: (text) => text,
-    styleTitle: (text) => text,
-    styleMuted: (text) => text,
+    styleSurface: styled ? (text) => safeBg(theme, cardSurface, text) : (text) => text,
+    styleBorder: styleCardBorder,
+    styleAccentBorder: styleCardBorder,
+    styleTitle: styled ? (text) => theme.fg("accent", theme.bold(text)) : (text) => text,
+    styleMuted: styled ? (text) => theme.fg("muted", text) : (text) => text,
   });
+}
+
+export function formatSkillPickerPreview(skills: SkillEntry[], query: string, width = PANEL_MAX_WIDTH, selectedIndex = 0, theme?: PickerTheme): string[] {
+  return formatSkillPickerCard(skills, query, width, selectedIndex, theme ?? plainPickerTheme(), Boolean(theme));
 }
 
 class SkillPickerComponent implements Component, Focusable {
@@ -298,17 +359,20 @@ class SkillPickerComponent implements Component, Focusable {
       ...formatSkillRows(this.filtered, this.selectedIndex, bodyWidth, this.theme),
     ].map((line) => truncateToWidth(line, bodyWidth, ""));
 
+    const cardSurface: PickerThemeBg = "toolPendingBg";
+    const styleCardBorder = cardBorderStyle(this.theme, cardSurface);
+
     return formatSkillPickerPanel({
       width: panelWidth,
       title: "Skills",
       subtitle: `${this.filtered.length}/${this.skills.length} · ${queryLabel}`,
       body,
       footer: "tab/enter select · ↑↓ move · esc",
-      styleSurface: (text) => text,
-      styleBorder: (text) => this.theme.fg("borderMuted", text),
-      styleAccentBorder: (text) => this.theme.fg("borderMuted", text),
+      styleSurface: (text) => safeBg(this.theme, cardSurface, text),
+      styleBorder: styleCardBorder,
+      styleAccentBorder: styleCardBorder,
       styleTitle: (text) => this.theme.fg("accent", this.theme.bold(text)),
-      styleMuted: (text) => this.theme.fg("dim", text),
+      styleMuted: (text) => this.theme.fg("muted", text),
     });
   }
 
@@ -357,8 +421,26 @@ class SkillPickerComponent implements Component, Focusable {
   }
 }
 
+// Cache for discovered skills to avoid repeated disk scans
+let cachedSkills: SkillEntry[] | null = null;
+let cachedSkillsCwd: string | null = null;
+
+export function getCachedSkills(cwd: string, home?: string): SkillEntry[] {
+  if (cachedSkills && cachedSkillsCwd === cwd) {
+    return cachedSkills;
+  }
+  cachedSkills = discoverSkills(cwd, home);
+  cachedSkillsCwd = cwd;
+  return cachedSkills;
+}
+
+export function clearSkillCache(): void {
+  cachedSkills = null;
+  cachedSkillsCwd = null;
+}
+
 async function pickSkill(ctx: ExtensionContext, initialQuery = ""): Promise<SkillPickerResult> {
-  const skills = discoverSkills(ctx.cwd);
+  const skills = getCachedSkills(ctx.cwd);
   if (skills.length === 0) {
     ctx.ui.notify("No Pi skills found", "warning");
     return null;
@@ -379,9 +461,25 @@ async function pickSkill(ctx: ExtensionContext, initialQuery = ""): Promise<Skil
 
 function installDollarSkillShortcut(ctx: ExtensionContext): void {
   let pickerOpen = false;
+  let lastKeyWasSpace = true; // Start true so bare $ at prompt start triggers
 
   ctx.ui.onTerminalInput?.((data: string) => {
-    if (pickerOpen || !data.startsWith("$")) {
+    if (pickerOpen) {
+      lastKeyWasSpace = data === " " || data === "\n" || data === "\r";
+      return undefined;
+    }
+
+    // Track whether the next key should allow $ trigger
+    const isSpace = data === " " || data === "\n" || data === "\r";
+
+    if (!data.startsWith("$")) {
+      lastKeyWasSpace = isSpace;
+      return undefined;
+    }
+
+    // Only trigger if $ is preceded by a space (or start of line)
+    if (!lastKeyWasSpace) {
+      lastKeyWasSpace = isSpace;
       return undefined;
     }
 
@@ -389,7 +487,12 @@ function installDollarSkillShortcut(ctx: ExtensionContext): void {
     const initialQuery = data.slice(1);
     void pickSkill(ctx, initialQuery)
       .then((skillName) => {
-        if (skillName) ctx.ui.pasteToEditor(skillPromptInsertion(skillName));
+        if (skillName) {
+          ctx.ui.pasteToEditor(skillPromptInsertion(skillName));
+        } else {
+          // User cancelled with Escape — insert the literal $ so they can use it
+          ctx.ui.pasteToEditor("$");
+        }
       })
       .finally(() => {
         pickerOpen = false;

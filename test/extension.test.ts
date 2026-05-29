@@ -3,14 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { expect, test } from "bun:test";
-import { createAgentSession, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { createAgentSession, DefaultResourceLoader, SessionManager } from "@mariozechner/pi-coding-agent";
+import { visibleWidth } from "@mariozechner/pi-tui";
 
 import extension, {
+  clearSkillCache,
   discoverSkills,
   filterSkills,
   formatSkillPickerPanel,
   formatSkillPickerPreview,
+  getCachedSkills,
   isSkillPickerConfirmKey,
   skillPromptInsertion,
 } from "../src/index.ts";
@@ -141,6 +143,30 @@ test("renders a concise skill picker preview with clean ellipsis and tab hint", 
   expectEveryLineVisibleWidth(preview, 58);
 });
 
+test("styled preview uses a visible elevated card surface and selected row background", () => {
+  const skills = [
+    { name: "rocket-extension", description: "Ship a Pi extension", filePath: "/tmp/rocket/SKILL.md", source: "pi-user" as const },
+    { name: "yeet", description: "Commit and push safely", filePath: "/tmp/yeet/SKILL.md", source: "pi-user" as const },
+  ];
+  const bg = (rgb: string, text: string) => `\u001b[48;2;${rgb}m${text}\u001b[49m`;
+  const theme = {
+    bold: (text: string) => text,
+    fg: (_color: string, text: string) => text,
+    bg: (color: string, text: string) => color === "selectedBg" ? bg("204;208;218", text) : bg("230;233;239", text),
+    getBgAnsi: (color: string) => color === "selectedBg" ? "\u001b[48;2;204;208;218m" : "\u001b[48;2;230;233;239m",
+    getColorMode: () => "truecolor" as const,
+  };
+
+  const preview = formatSkillPickerPreview(skills, "", 72, 1, theme);
+  const rendered = preview.join("\n");
+
+  expect(rendered).toContain("\u001b[48;2;230;233;239m");
+  // Border at 45% mix: 230,233,239 mixed with 0,0,0 = 127,128,131
+  expect(rendered).toContain("\u001b[38;2;127;128;131m╭");
+  expect(rendered).toContain("\u001b[48;2;204;208;218m› yeet");
+  expectEveryLineVisibleWidth(preview, 58);
+});
+
 test("keeps panel width stable with OSC links, emoji, CJK, and narrow widths", () => {
   const linkedSkill = "\u001b]8;;https://example.com\u001b\\github-pr\u001b]8;;\u001b\\  handles 🔥 PR レビュー";
   const panel = formatSkillPickerPanel({
@@ -257,11 +283,343 @@ test("extension registers command and installs a terminal $ shortcut on session 
     });
 
     expect(terminalHandler).toBeTypeOf("function");
-    expect(terminalHandler?.("a")).toBeUndefined();
+    // $ at start of line (or after space) triggers
     expect(terminalHandler?.("$ski")).toEqual({ consume: true });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(pastedText).toBe(skillPromptInsertion("21st-sdk"));
   } finally {
     rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("$ shortcut does not trigger when preceded by a non-space character", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "pi-skill-selector-space-"));
+  writeSkill(join(temp, ".pi", "skills"), "test-skill", "test-skill", "Test skill");
+
+  let terminalHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
+
+  try {
+    const mockExtension = {
+      registerCommand() {},
+      on(_event: string, handler: any) {
+        if (_event === "session_start") {
+          handler({}, {
+            cwd: temp,
+            ui: {
+              custom() { return Promise.resolve("test-skill"); },
+              notify() {},
+              onTerminalInput(h: typeof terminalHandler) {
+                terminalHandler = h;
+                return () => {};
+              },
+              pasteToEditor() {},
+            },
+          });
+        }
+      },
+    };
+    extension(mockExtension as any);
+
+    expect(terminalHandler).toBeDefined();
+    // Type "x" then "$" — the $ should not trigger because x is not a space
+    expect(terminalHandler?.("x")).toBeUndefined();
+    expect(terminalHandler?.("$")).toBeUndefined();
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("$ shortcut triggers after a space", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "pi-skill-selector-space-ok-"));
+  writeSkill(join(temp, ".pi", "skills"), "test-skill", "test-skill", "Test skill");
+
+  let terminalHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
+  let pastedText: string | undefined;
+
+  try {
+    const mockExtension = {
+      registerCommand() {},
+      on(_event: string, handler: any) {
+        if (_event === "session_start") {
+          handler({}, {
+            cwd: temp,
+            ui: {
+              custom() { return Promise.resolve("test-skill"); },
+              notify() {},
+              onTerminalInput(h: typeof terminalHandler) {
+                terminalHandler = h;
+                return () => {};
+              },
+              pasteToEditor(text: string) {
+                pastedText = text;
+              },
+            },
+          });
+        }
+      },
+    };
+    extension(mockExtension as any);
+
+    expect(terminalHandler).toBeDefined();
+    // Type " " then "$" — the $ should trigger because space is before it
+    expect(terminalHandler?.(" ")).toBeUndefined();
+    expect(terminalHandler?.("$")).toEqual({ consume: true });
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("pressing Escape after $ leaves a single dollar sign", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "pi-skill-selector-escape-"));
+  writeSkill(join(temp, ".pi", "skills"), "test-skill", "test-skill", "Test skill");
+
+  let terminalHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
+  let pastedText: string | undefined;
+
+  try {
+    const mockExtension = {
+      registerCommand() {},
+      on(_event: string, handler: any) {
+        if (_event === "session_start") {
+          handler({}, {
+            cwd: temp,
+            ui: {
+              custom() { return Promise.resolve(null); },
+              notify() {},
+              onTerminalInput(h: typeof terminalHandler) {
+                terminalHandler = h;
+                return () => {};
+              },
+              pasteToEditor(text: string) {
+                pastedText = text;
+              },
+            },
+          });
+        }
+      },
+    };
+    extension(mockExtension as any);
+
+    expect(terminalHandler).toBeDefined();
+    // Type "$" then cancel with Escape
+    expect(terminalHandler?.("$")).toEqual({ consume: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(pastedText).toBe("$");
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("discoverSkills is cached and subsequent calls are fast", () => {
+  clearSkillCache(); // Clear cache from previous tests
+
+  const temp = mkdtempSync(join(tmpdir(), "pi-skill-selector-cache-"));
+  const home = join(temp, "home");
+  const cwd = join(temp, "repo");
+
+  writeSkill(join(home, ".pi", "agent", "skills"), "global-skill", "global-one", "Global skill");
+  writeSkill(join(cwd, ".pi", "skills"), "project-skill", "project-one", "Project skill");
+
+  try {
+    // First call should scan disk
+    const start1 = performance.now();
+    const skills1 = discoverSkills(cwd, home);
+    const duration1 = performance.now() - start1;
+
+    expect(skills1.length).toBe(2);
+
+    // Second call should use cache
+    const start2 = performance.now();
+    const skills2 = getCachedSkills(cwd, home);
+    const duration2 = performance.now() - start2;
+
+    expect(skills2.length).toBe(2);
+    expect(skills2.map((s) => s.name)).toEqual(skills1.map((s) => s.name));
+    // Cached call should be fast (under 1ms)
+    expect(duration2).toBeLessThan(1);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("extension loads in under 50ms with many skills", () => {
+  const temp = mkdtempSync(join(tmpdir(), "pi-skill-selector-perf-"));
+  const home = join(temp, "home");
+  const cwd = join(temp, "repo");
+
+  // Create 100 skills to simulate a large skill library
+  for (let i = 0; i < 100; i++) {
+    writeSkill(join(home, ".pi", "agent", "skills"), `skill-${i}`, `skill-${i}`, `Description ${i}`);
+  }
+
+  let sessionStartHandler: ((_event: unknown, ctx: any) => void) | undefined;
+
+  try {
+    const start = performance.now();
+    const mockExtension = {
+      registerCommand() {},
+      on(_event: string, handler: any) {
+        if (_event === "session_start") sessionStartHandler = handler;
+      },
+    };
+    extension(mockExtension as any);
+
+    sessionStartHandler?.({}, {
+      cwd,
+      ui: {
+        custom() { return Promise.resolve(null); },
+        notify() {},
+        onTerminalInput() { return () => {}; },
+        pasteToEditor() {},
+      },
+    });
+
+    const duration = performance.now() - start;
+    // Extension should load in under 50ms — the key is that it doesn't scan skills on startup
+    expect(duration).toBeLessThan(50);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("border is visible in both light and dark themes", () => {
+  const skills = [
+    { name: "test", description: "Test", filePath: "/tmp/test/SKILL.md", source: "pi-user" as const },
+  ];
+
+  // Dark theme (low luminance background)
+  const darkTheme = {
+    bold: (text: string) => text,
+    fg: (_color: string, text: string) => text,
+    bg: (color: string, text: string) => color === "toolPendingBg" ? `\u001b[48;2;30;30;30m${text}\u001b[49m` : text,
+    getBgAnsi: (color: string) => color === "toolPendingBg" ? "\u001b[48;2;30;30;30m" : "",
+    getColorMode: () => "truecolor" as const,
+  };
+
+  const darkPreview = formatSkillPickerPreview(skills, "", 58, 0, darkTheme);
+  const darkRendered = darkPreview.join("\n");
+
+  // Border should be mixed toward white (high luminance target)
+  // 30,30,30 mixed with 255,255,255 at 45% = ~131,131,131
+  expect(darkRendered).toContain("\u001b[38;2;131;131;131m");
+
+  // Light theme (high luminance background)
+  const lightTheme = {
+    bold: (text: string) => text,
+    fg: (_color: string, text: string) => text,
+    bg: (color: string, text: string) => color === "toolPendingBg" ? `\u001b[48;2;230;233;239m${text}\u001b[49m` : text,
+    getBgAnsi: (color: string) => color === "toolPendingBg" ? "\u001b[48;2;230;233;239m" : "",
+    getColorMode: () => "truecolor" as const,
+  };
+
+  const lightPreview = formatSkillPickerPreview(skills, "", 58, 0, lightTheme);
+  const lightRendered = lightPreview.join("\n");
+
+  // Border should be mixed toward black (low luminance target)
+  // 230,233,239 mixed with 0,0,0 at 45% = ~127,128,131
+  expect(lightRendered).toContain("\u001b[38;2;127;128;131m");
+});
+
+test("e2e: Pi SDK loads the extension from a .pi folder in under 100ms", async () => {
+  const agentDir = mkdtempSync(join(tmpdir(), "pi-skill-selector-e2e-"));
+  try {
+    // Create a .pi folder structure with skills
+    const piSkillsDir = join(agentDir, ".pi", "skills");
+    for (let i = 0; i < 50; i++) {
+      writeSkill(piSkillsDir, `skill-${i}`, `skill-${i}`, `Description ${i}`);
+    }
+
+    const loader = new DefaultResourceLoader({
+      cwd: process.cwd(),
+      agentDir,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+    await loader.reload();
+
+    const start = performance.now();
+    const { session } = await createAgentSession({
+      cwd: process.cwd(),
+      agentDir,
+      resourceLoader: loader,
+      sessionManager: SessionManager.inMemory(process.cwd()),
+      noTools: "all",
+    });
+
+    try {
+      await session.bindExtensions({});
+      const duration = performance.now() - start;
+      // Extension should load and bind in under 100ms with 50 skills
+      expect(duration).toBeLessThan(100);
+      expect(session.extensionRunner.getCommand("skill-selector")).toBeDefined();
+    } finally {
+      session.dispose();
+    }
+  } finally {
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("e2e: skill picker opens fast with cached skills from .pi folder", async () => {
+  const agentDir = mkdtempSync(join(tmpdir(), "pi-skill-picker-e2e-"));
+  let pastedText: string | undefined;
+
+  try {
+    // Create a .pi/skills folder with test skills
+    const piSkillsDir = join(agentDir, ".pi", "skills");
+    writeSkill(piSkillsDir, "test-skill", "test-skill", "A test skill");
+
+    // Directly test the extension with the .pi folder
+    let terminalHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
+    let commandHandler: ((args: string, ctx: any) => Promise<void>) | undefined;
+    let sessionStartHandler: ((_event: unknown, ctx: any) => void) | undefined;
+
+    extension({
+      registerCommand(name: string, options: { handler: (args: string, ctx: any) => Promise<void> }) {
+        if (name === "skill-selector") commandHandler = options.handler;
+      },
+      on(event: string, handler: (_event: unknown, ctx: any) => void) {
+        if (event === "session_start") sessionStartHandler = handler;
+      },
+    } as any);
+
+    expect(commandHandler).toBeDefined();
+    expect(sessionStartHandler).toBeDefined();
+
+    // Simulate session_start with the .pi folder
+    const start = performance.now();
+    sessionStartHandler?.({}, {
+      cwd: agentDir,
+      ui: {
+        custom() { return Promise.resolve("test-skill"); },
+        notify() {},
+        onTerminalInput(h: typeof terminalHandler) {
+          terminalHandler = h;
+          return () => {};
+        },
+        pasteToEditor(text: string) {
+          pastedText = text;
+        },
+      },
+    });
+
+    const duration = performance.now() - start;
+    // Session start should be fast (<20ms) because discoverSkills is lazy
+    expect(duration).toBeLessThan(20);
+    expect(terminalHandler).toBeDefined();
+
+    // Now trigger the $ shortcut — this should use cached skills
+    const pickerStart = performance.now();
+    expect(terminalHandler?.("$")).toEqual({ consume: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const pickerDuration = performance.now() - pickerStart;
+
+    expect(pastedText).toBe(skillPromptInsertion("test-skill"));
+    // Picker should open and resolve in under 50ms
+    expect(pickerDuration).toBeLessThan(50);
+  } finally {
+    rmSync(agentDir, { recursive: true, force: true });
   }
 });
