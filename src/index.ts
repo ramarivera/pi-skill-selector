@@ -450,12 +450,10 @@ async function pickSkill(ctx: ExtensionContext, initialQuery = ""): Promise<Skil
   return ctx.ui.custom<SkillPickerResult>(
     (_tui, theme, _keybindings, done) => new SkillPickerComponent(skills, initialQuery, theme, done),
     {
-      overlay: true,
-      overlayOptions: {
-        anchor: "center",
-        width: PANEL_MAX_WIDTH,
-        maxHeight: 18,
-      },
+      // Pi's overlay compositor intentionally preserves terminal image rows, so
+      // a previous pasted image can punch through the picker. Use focused
+      // non-overlay mode until the upstream TUI can composite over image lines.
+      overlay: false,
     },
   );
 }

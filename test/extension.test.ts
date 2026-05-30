@@ -251,6 +251,7 @@ test("extension registers command and installs a terminal $ shortcut on session 
   let sessionStartHandler: ((_event: unknown, ctx: any) => void) | undefined;
   let terminalHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
   let pastedText: string | undefined;
+  let customOptions: { overlay?: boolean } | undefined;
 
   try {
     extension({
@@ -268,7 +269,8 @@ test("extension registers command and installs a terminal $ shortcut on session 
     sessionStartHandler?.({}, {
       cwd: temp,
       ui: {
-        custom() {
+        custom(_factory: unknown, options?: { overlay?: boolean }) {
+          customOptions = options;
           return Promise.resolve("21st-sdk");
         },
         notify() {},
@@ -286,6 +288,7 @@ test("extension registers command and installs a terminal $ shortcut on session 
     // $ at start of line (or after space) triggers
     expect(terminalHandler?.("$ski")).toEqual({ consume: true });
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(customOptions?.overlay).toBe(false);
     expect(pastedText).toBe(skillPromptInsertion("21st-sdk"));
   } finally {
     rmSync(temp, { recursive: true, force: true });
