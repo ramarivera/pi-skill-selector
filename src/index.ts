@@ -465,7 +465,6 @@ function installDollarSkillShortcut(ctx: ExtensionContext): void {
 
   ctx.ui.onTerminalInput?.((data: string) => {
     if (pickerOpen) {
-      lastKeyWasSpace = data === " " || data === "\n" || data === "\r";
       return undefined;
     }
 
@@ -493,9 +492,7 @@ function installDollarSkillShortcut(ctx: ExtensionContext): void {
       .then((skillName) => {
         if (skillName) {
           ctx.ui.pasteToEditor(skillPromptInsertion(skillName));
-        } else {
-          // User cancelled with Escape — insert the literal $ so they can use it
-          ctx.ui.pasteToEditor("$");
+          lastKeyWasSpace = true;
         }
       })
       .finally(() => {

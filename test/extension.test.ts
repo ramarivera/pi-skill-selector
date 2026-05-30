@@ -408,12 +408,12 @@ test("$ shortcut triggers with Kitty keyboard protocol (CSI-u sequence)", async 
   }
 });
 
-test("pressing Escape after $ leaves a single dollar sign", async () => {
+test("pressing Escape after $ dismisses without inserting a literal dollar", async () => {
   const temp = mkdtempSync(join(tmpdir(), "pi-skill-selector-escape-"));
   writeSkill(join(temp, ".pi", "skills"), "test-skill", "test-skill", "Test skill");
 
   let terminalHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
-  let pastedText: string | undefined;
+  const pastedText: string[] = [];
 
   try {
     const mockExtension = {
@@ -430,7 +430,7 @@ test("pressing Escape after $ leaves a single dollar sign", async () => {
                 return () => {};
               },
               pasteToEditor(text: string) {
-                pastedText = text;
+                pastedText.push(text);
               },
             },
           });
@@ -440,10 +440,66 @@ test("pressing Escape after $ leaves a single dollar sign", async () => {
     extension(mockExtension as any);
 
     expect(terminalHandler).toBeDefined();
-    // Type "$" then cancel with Escape
     expect(terminalHandler?.("$")).toEqual({ consume: true });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(pastedText).toBe("$");
+    expect(pastedText).toEqual([]);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("$ shortcut can reopen after Escape dismisses the picker", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "pi-skill-selector-escape-reopen-"));
+  writeSkill(join(temp, ".pi", "skills"), "test-skill", "test-skill", "Test skill");
+
+  let terminalHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
+  const pastedText: string[] = [];
+  const pendingPickers: Array<(value: string | null) => void> = [];
+
+  try {
+    const mockExtension = {
+      registerCommand() {},
+      on(_event: string, handler: any) {
+        if (_event === "session_start") {
+          handler({}, {
+            cwd: temp,
+            ui: {
+              custom() {
+                return new Promise<string | null>((resolve) => {
+                  pendingPickers.push(resolve);
+                });
+              },
+              notify() {},
+              onTerminalInput(h: typeof terminalHandler) {
+                terminalHandler = h;
+                return () => {};
+              },
+              pasteToEditor(text: string) {
+                pastedText.push(text);
+              },
+            },
+          });
+        }
+      },
+    };
+    extension(mockExtension as any);
+
+    expect(terminalHandler).toBeDefined();
+    expect(terminalHandler?.("$")).toEqual({ consume: true });
+    expect(pendingPickers.length).toBe(1);
+
+    // Pi still routes the Escape key through terminal input while the overlay is active.
+    expect(terminalHandler?.("\x1b")).toBeUndefined();
+    pendingPickers[0]?.(null);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(pastedText).toEqual([]);
+    expect(terminalHandler?.("$")).toEqual({ consume: true });
+    expect(pendingPickers.length).toBe(2);
+
+    pendingPickers[1]?.("test-skill");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(pastedText).toEqual([skillPromptInsertion("test-skill")]);
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
