@@ -6,6 +6,7 @@ import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-cod
 import {
   fuzzyFilter,
   Input,
+  decodeKittyPrintable,
   Key,
   matchesKey,
   truncateToWidth,
@@ -459,6 +460,11 @@ async function pickSkill(ctx: ExtensionContext, initialQuery = ""): Promise<Skil
   );
 }
 
+function getDollarShortcutQuery(data: string): string | null {
+  if (data.startsWith("$")) return data.slice(1);
+  return decodeKittyPrintable(data) === "$" ? "" : null;
+}
+
 function installDollarSkillShortcut(ctx: ExtensionContext): void {
   let pickerOpen = false;
   let lastKeyWasSpace = true; // Start true so bare $ at prompt start triggers
@@ -468,26 +474,22 @@ function installDollarSkillShortcut(ctx: ExtensionContext): void {
       return undefined;
     }
 
-    // Track whether the next key should allow $ trigger
-    const isSpace = data === " " || data === "\n" || data === "\r";
+    // Track whether the next key should allow $ trigger.
+    const isSpace = matchesKey(data, Key.space) || matchesKey(data, Key.enter);
+    const initialQuery = getDollarShortcutQuery(data);
 
-    // With Kitty keyboard protocol, $ is sent as \x1b[36u (CSI-u sequence), not raw "$".
-    // Use matchesKey to handle both raw characters and Kitty protocol sequences.
-    if (!matchesKey(data, "$") && !data.startsWith("$")) {
+    if (initialQuery === null) {
       lastKeyWasSpace = isSpace;
       return undefined;
     }
 
-    // Only trigger if $ is preceded by a space (or start of line)
+    // Only trigger if $ is preceded by a space (or start of line).
     if (!lastKeyWasSpace) {
       lastKeyWasSpace = isSpace;
       return undefined;
     }
 
     pickerOpen = true;
-    // For Kitty protocol, data is the CSI-u sequence, so slice(1) is not a query.
-    // Only use data.slice(1) as query when data starts with raw "$" (e.g., "$git").
-    const initialQuery = data.startsWith("$") ? data.slice(1) : "";
     void pickSkill(ctx, initialQuery)
       .then((skillName) => {
         if (skillName) {

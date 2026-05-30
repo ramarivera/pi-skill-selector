@@ -401,8 +401,45 @@ test("$ shortcut triggers with Kitty keyboard protocol (CSI-u sequence)", async 
     extension(mockExtension as any);
 
     expect(terminalHandler).toBeDefined();
-    // With Kitty keyboard protocol active, $ is sent as \x1b[36u, not raw "$"
+    // Some terminals report the shifted printable itself.
     expect(terminalHandler?.("\x1b[36u")).toEqual({ consume: true });
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("$ shortcut triggers with shifted Kitty keyboard protocol sequence", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "pi-skill-selector-kitty-shifted-"));
+  writeSkill(join(temp, ".pi", "skills"), "test-skill", "test-skill", "Test skill");
+
+  let terminalHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
+
+  try {
+    const mockExtension = {
+      registerCommand() {},
+      on(_event: string, handler: any) {
+        if (_event === "session_start") {
+          handler({}, {
+            cwd: temp,
+            ui: {
+              custom() { return Promise.resolve("test-skill"); },
+              notify() {},
+              onTerminalInput(h: typeof terminalHandler) {
+                terminalHandler = h;
+                return () => {};
+              },
+              pasteToEditor() {},
+            },
+          });
+        }
+      },
+    };
+    extension(mockExtension as any);
+
+    expect(terminalHandler).toBeDefined();
+    // Kitty's disambiguate+alternate-key encoding can report Shift+4 as
+    // base key "4" (52), shifted printable "$" (36), modifier Shift (2).
+    expect(terminalHandler?.("\x1b[52:36;2u")).toEqual({ consume: true });
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
