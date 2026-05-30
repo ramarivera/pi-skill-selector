@@ -369,6 +369,45 @@ test("$ shortcut triggers after a space", async () => {
   }
 });
 
+test("$ shortcut triggers with Kitty keyboard protocol (CSI-u sequence)", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "pi-skill-selector-kitty-"));
+  writeSkill(join(temp, ".pi", "skills"), "test-skill", "test-skill", "Test skill");
+
+  let terminalHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
+  let pastedText: string | undefined;
+
+  try {
+    const mockExtension = {
+      registerCommand() {},
+      on(_event: string, handler: any) {
+        if (_event === "session_start") {
+          handler({}, {
+            cwd: temp,
+            ui: {
+              custom() { return Promise.resolve("test-skill"); },
+              notify() {},
+              onTerminalInput(h: typeof terminalHandler) {
+                terminalHandler = h;
+                return () => {};
+              },
+              pasteToEditor(text: string) {
+                pastedText = text;
+              },
+            },
+          });
+        }
+      },
+    };
+    extension(mockExtension as any);
+
+    expect(terminalHandler).toBeDefined();
+    // With Kitty keyboard protocol active, $ is sent as \x1b[36u, not raw "$"
+    expect(terminalHandler?.("\x1b[36u")).toEqual({ consume: true });
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test("pressing Escape after $ leaves a single dollar sign", async () => {
   const temp = mkdtempSync(join(tmpdir(), "pi-skill-selector-escape-"));
   writeSkill(join(temp, ".pi", "skills"), "test-skill", "test-skill", "Test skill");

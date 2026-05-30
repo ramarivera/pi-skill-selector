@@ -472,7 +472,9 @@ function installDollarSkillShortcut(ctx: ExtensionContext): void {
     // Track whether the next key should allow $ trigger
     const isSpace = data === " " || data === "\n" || data === "\r";
 
-    if (!data.startsWith("$")) {
+    // With Kitty keyboard protocol, $ is sent as \x1b[36u (CSI-u sequence), not raw "$".
+    // Use matchesKey to handle both raw characters and Kitty protocol sequences.
+    if (!matchesKey(data, "$") && !data.startsWith("$")) {
       lastKeyWasSpace = isSpace;
       return undefined;
     }
@@ -484,7 +486,9 @@ function installDollarSkillShortcut(ctx: ExtensionContext): void {
     }
 
     pickerOpen = true;
-    const initialQuery = data.slice(1);
+    // For Kitty protocol, data is the CSI-u sequence, so slice(1) is not a query.
+    // Only use data.slice(1) as query when data starts with raw "$" (e.g., "$git").
+    const initialQuery = data.startsWith("$") ? data.slice(1) : "";
     void pickSkill(ctx, initialQuery)
       .then((skillName) => {
         if (skillName) {
