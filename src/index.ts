@@ -444,9 +444,12 @@ export function clearSkillCache(): void {
 
 type OverlayCompositeTui = {
   compositeLineAt?: (baseLine: string, overlayLine: string, startCol: number, overlayWidth: number, totalWidth: number) => string;
+  render?: (width: number) => string[];
   terminal?: { write?: (data: string) => void };
   previousKittyImageIds?: Set<number>;
   __piSkillSelectorImageOverlayPatch?: boolean;
+  __piSkillSelectorOriginalRender?: (width: number) => string[];
+  __piSkillSelectorImageSuppressionDepth?: number;
 };
 
 const KITTY_IMAGE_SEQUENCE_PATTERN = /\u001b_G([\s\S]*?)\u001b\\/g;
@@ -466,13 +469,41 @@ function extractKittyImageIds(line: string): number[] {
   return ids;
 }
 
-function isKittyImageLine(line: string): boolean {
-  return line.includes("\u001b_G");
+function isTerminalImageLine(line: string): boolean {
+  return line.includes("\u001b_G") || line.includes("\u001b]1337;File=") || line.includes("\u001bPq");
+}
+
+function blankTerminalImageLines(lines: string[], width: number): string[] {
+  return lines.map((line) => isTerminalImageLine(line) ? " ".repeat(width) : line);
 }
 
 export function clearVisibleTerminalImagesForOverlay(tui: OverlayCompositeTui): void {
   tui.terminal?.write?.(deleteAllKittyImages());
   tui.previousKittyImageIds?.clear();
+}
+
+export function suppressTerminalImagesForOverlay(tui: OverlayCompositeTui): () => void {
+  clearVisibleTerminalImagesForOverlay(tui);
+
+  if (typeof tui.render !== "function") return () => {};
+
+  tui.__piSkillSelectorImageSuppressionDepth = (tui.__piSkillSelectorImageSuppressionDepth ?? 0) + 1;
+  if (!tui.__piSkillSelectorOriginalRender) {
+    tui.__piSkillSelectorOriginalRender = tui.render.bind(tui);
+    tui.render = (width) => blankTerminalImageLines(tui.__piSkillSelectorOriginalRender?.(width) ?? [], width);
+  }
+
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    tui.__piSkillSelectorImageSuppressionDepth = Math.max(0, (tui.__piSkillSelectorImageSuppressionDepth ?? 1) - 1);
+    if (tui.__piSkillSelectorImageSuppressionDepth > 0) return;
+    if (tui.__piSkillSelectorOriginalRender) {
+      tui.render = tui.__piSkillSelectorOriginalRender;
+      tui.__piSkillSelectorOriginalRender = undefined;
+    }
+  };
 }
 
 export function patchTuiImageOverlayComposite(tui: OverlayCompositeTui): void {
@@ -482,7 +513,7 @@ export function patchTuiImageOverlayComposite(tui: OverlayCompositeTui): void {
 
   const originalCompositeLineAt = tui.compositeLineAt.bind(tui);
   tui.compositeLineAt = (baseLine, overlayLine, startCol, overlayWidth, totalWidth) => {
-    if (!isKittyImageLine(baseLine)) {
+    if (!isTerminalImageLine(baseLine)) {
       return originalCompositeLineAt(baseLine, overlayLine, startCol, overlayWidth, totalWidth);
     }
 
@@ -501,20 +532,30 @@ async function pickSkill(ctx: ExtensionContext, initialQuery = ""): Promise<Skil
     return null;
   }
 
-  return ctx.ui.custom<SkillPickerResult>(
-    (tui, theme, _keybindings, done) => {
-      patchTuiImageOverlayComposite(tui as unknown as OverlayCompositeTui);
-      return new SkillPickerComponent(skills, initialQuery, theme, done);
-    },
-    {
-      overlay: true,
-      overlayOptions: {
-        anchor: "center",
-        width: PANEL_MAX_WIDTH,
-        maxHeight: 18,
+  let restoreImageRendering = () => {};
+  try {
+    return await ctx.ui.custom<SkillPickerResult>(
+      (tui, theme, _keybindings, done) => {
+        const imageSafeTui = tui as unknown as OverlayCompositeTui;
+        patchTuiImageOverlayComposite(imageSafeTui);
+        restoreImageRendering = suppressTerminalImagesForOverlay(imageSafeTui);
+        return new SkillPickerComponent(skills, initialQuery, theme, (result) => {
+          restoreImageRendering();
+          done(result);
+        });
       },
-    },
-  );
+      {
+        overlay: true,
+        overlayOptions: {
+          anchor: "center",
+          width: PANEL_MAX_WIDTH,
+          maxHeight: 18,
+        },
+      },
+    );
+  } finally {
+    restoreImageRendering();
+  }
 }
 
 function getDollarShortcutQuery(data: string): string | null {
