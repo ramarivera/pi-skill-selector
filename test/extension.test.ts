@@ -4,10 +4,11 @@ import { join } from "node:path";
 
 import { expect, test } from "bun:test";
 import { createAgentSession, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { deleteAllKittyImages, TUI, visibleWidth } from "@earendil-works/pi-tui";
 
 import extension, {
   clearSkillCache,
+  clearVisibleTerminalImagesForOverlay,
   discoverSkills,
   filterSkills,
   formatSkillPickerPanel,
@@ -244,24 +245,65 @@ test("Pi SDK binds the local extension and exposes /skill-selector", async () =>
   }
 });
 
-test("patches overlay compositing so Kitty image rows do not punch through", () => {
+test("clears visible Kitty graphics before opening the centered overlay", () => {
   const writes: string[] = [];
+  const previousKittyImageIds = new Set([4242]);
+
   const tui = {
+    previousKittyImageIds,
     terminal: {
       write(data: string) {
         writes.push(data);
       },
     },
-    compositeLineAt(baseLine: string, overlayLine: string, startCol: number, overlayWidth: number, totalWidth: number) {
-      return `${baseLine.slice(0, startCol)}${overlayLine}${" ".repeat(Math.max(totalWidth - startCol - overlayWidth, 0))}`;
-    },
   };
-  const kittyLine = "\u001b_Ga=T,f=100,i=4242;AAAA\u001b\\";
+
+  clearVisibleTerminalImagesForOverlay(tui);
+  clearVisibleTerminalImagesForOverlay(tui);
+
+  expect(writes).toEqual([deleteAllKittyImages(), deleteAllKittyImages()]);
+  expect(previousKittyImageIds.size).toBe(0);
+});
+
+test("prepares a real TUI with stale Kitty graphics before selector overlay rendering", () => {
+  const writes: string[] = [];
+  const terminal = {
+    start() {},
+    stop() {},
+    drainInput: () => Promise.resolve(),
+    write(data: string) {
+      writes.push(data);
+    },
+    get columns() {
+      return 100;
+    },
+    get rows() {
+      return 32;
+    },
+    get kittyProtocolActive() {
+      return true;
+    },
+    moveBy() {},
+    hideCursor() {},
+    showCursor() {},
+    clearLine() {},
+    clearFromCursor() {},
+    clearScreen() {},
+    setTitle() {},
+    setProgress() {},
+  };
+  const tui = new TUI(terminal, false) as unknown as {
+    terminal: typeof terminal;
+    previousKittyImageIds: Set<number>;
+    compositeLineAt(baseLine: string, overlayLine: string, startCol: number, overlayWidth: number, totalWidth: number): string;
+  };
+  tui.previousKittyImageIds = new Set([4242]);
 
   patchTuiImageOverlayComposite(tui);
 
-  expect(tui.compositeLineAt(kittyLine, "PICKER", 3, 6, 12)).toBe("   PICKER   ");
-  expect(writes.join("")).toContain("i=4242");
+  expect(writes).toContain(deleteAllKittyImages());
+  expect(tui.previousKittyImageIds.size).toBe(0);
+  expect(stripAnsi(tui.compositeLineAt("\u001b_Ga=T,f=100,i=4242;AAAA\u001b\\", "PICKER", 3, 6, 12))).toBe("   PICKER   ");
 });
 
 test("extension registers command and installs a terminal $ shortcut on session start", async () => {
@@ -273,6 +315,8 @@ test("extension registers command and installs a terminal $ shortcut on session 
   let terminalHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
   let pastedText: string | undefined;
   let customOptions: { overlay?: boolean; overlayOptions?: { anchor?: string; width?: number; maxHeight?: number } } | undefined;
+  const terminalWrites: string[] = [];
+  const previousKittyImageIds = new Set([4242]);
 
   try {
     extension({
@@ -293,6 +337,12 @@ test("extension registers command and installs a terminal $ shortcut on session 
         custom(factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (result: string | null) => void) => unknown, options?: typeof customOptions) {
           customOptions = options;
           factory({
+            previousKittyImageIds,
+            terminal: {
+              write(data: string) {
+                terminalWrites.push(data);
+              },
+            },
             compositeLineAt(baseLine: string, overlayLine: string, startCol: number, overlayWidth: number, totalWidth: number) {
               return `${baseLine}|${overlayLine}|${startCol}|${overlayWidth}|${totalWidth}`;
             },
@@ -316,6 +366,8 @@ test("extension registers command and installs a terminal $ shortcut on session 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(customOptions?.overlay).toBe(true);
     expect(customOptions?.overlayOptions).toEqual({ anchor: "center", width: 58, maxHeight: 18 });
+    expect(terminalWrites).toContain(deleteAllKittyImages());
+    expect(previousKittyImageIds.size).toBe(0);
     expect(pastedText).toBe(skillPromptInsertion("21st-sdk"));
   } finally {
     rmSync(temp, { recursive: true, force: true });

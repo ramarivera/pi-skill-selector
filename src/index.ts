@@ -7,6 +7,7 @@ import {
   fuzzyFilter,
   Input,
   decodeKittyPrintable,
+  deleteAllKittyImages,
   deleteKittyImage,
   Key,
   matchesKey,
@@ -444,6 +445,7 @@ export function clearSkillCache(): void {
 type OverlayCompositeTui = {
   compositeLineAt?: (baseLine: string, overlayLine: string, startCol: number, overlayWidth: number, totalWidth: number) => string;
   terminal?: { write?: (data: string) => void };
+  previousKittyImageIds?: Set<number>;
   __piSkillSelectorImageOverlayPatch?: boolean;
 };
 
@@ -468,7 +470,14 @@ function isKittyImageLine(line: string): boolean {
   return line.includes("\u001b_G");
 }
 
+export function clearVisibleTerminalImagesForOverlay(tui: OverlayCompositeTui): void {
+  tui.terminal?.write?.(deleteAllKittyImages());
+  tui.previousKittyImageIds?.clear();
+}
+
 export function patchTuiImageOverlayComposite(tui: OverlayCompositeTui): void {
+  clearVisibleTerminalImagesForOverlay(tui);
+
   if (tui.__piSkillSelectorImageOverlayPatch || typeof tui.compositeLineAt !== "function") return;
 
   const originalCompositeLineAt = tui.compositeLineAt.bind(tui);
