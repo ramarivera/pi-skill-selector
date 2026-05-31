@@ -14,6 +14,7 @@ import extension, {
   formatSkillPickerPreview,
   getCachedSkills,
   isSkillPickerConfirmKey,
+  patchTuiImageOverlayComposite,
   skillPromptInsertion,
 } from "../src/index.ts";
 
@@ -243,6 +244,26 @@ test("Pi SDK binds the local extension and exposes /skill-selector", async () =>
   }
 });
 
+test("patches overlay compositing so Kitty image rows do not punch through", () => {
+  const writes: string[] = [];
+  const tui = {
+    terminal: {
+      write(data: string) {
+        writes.push(data);
+      },
+    },
+    compositeLineAt(baseLine: string, overlayLine: string, startCol: number, overlayWidth: number, totalWidth: number) {
+      return `${baseLine.slice(0, startCol)}${overlayLine}${" ".repeat(Math.max(totalWidth - startCol - overlayWidth, 0))}`;
+    },
+  };
+  const kittyLine = "\u001b_Ga=T,f=100,i=4242;AAAA\u001b\\";
+
+  patchTuiImageOverlayComposite(tui);
+
+  expect(tui.compositeLineAt(kittyLine, "PICKER", 3, 6, 12)).toBe("   PICKER   ");
+  expect(writes.join("")).toContain("i=4242");
+});
+
 test("extension registers command and installs a terminal $ shortcut on session start", async () => {
   const temp = mkdtempSync(join(tmpdir(), "pi-skill-selector-shortcut-"));
   writeSkill(join(temp, ".pi", "skills"), "21st-sdk", "21st-sdk", "21st Agents docs");
@@ -251,7 +272,7 @@ test("extension registers command and installs a terminal $ shortcut on session 
   let sessionStartHandler: ((_event: unknown, ctx: any) => void) | undefined;
   let terminalHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
   let pastedText: string | undefined;
-  let customOptions: { overlay?: boolean } | undefined;
+  let customOptions: { overlay?: boolean; overlayOptions?: { anchor?: string; width?: number; maxHeight?: number } } | undefined;
 
   try {
     extension({
@@ -269,8 +290,13 @@ test("extension registers command and installs a terminal $ shortcut on session 
     sessionStartHandler?.({}, {
       cwd: temp,
       ui: {
-        custom(_factory: unknown, options?: { overlay?: boolean }) {
+        custom(factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (result: string | null) => void) => unknown, options?: typeof customOptions) {
           customOptions = options;
+          factory({
+            compositeLineAt(baseLine: string, overlayLine: string, startCol: number, overlayWidth: number, totalWidth: number) {
+              return `${baseLine}|${overlayLine}|${startCol}|${overlayWidth}|${totalWidth}`;
+            },
+          }, {}, {}, () => {});
           return Promise.resolve("21st-sdk");
         },
         notify() {},
@@ -288,7 +314,8 @@ test("extension registers command and installs a terminal $ shortcut on session 
     // $ at start of line (or after space) triggers
     expect(terminalHandler?.("$ski")).toEqual({ consume: true });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(customOptions?.overlay).toBe(false);
+    expect(customOptions?.overlay).toBe(true);
+    expect(customOptions?.overlayOptions).toEqual({ anchor: "center", width: 58, maxHeight: 18 });
     expect(pastedText).toBe(skillPromptInsertion("21st-sdk"));
   } finally {
     rmSync(temp, { recursive: true, force: true });

@@ -7,6 +7,7 @@ import {
   fuzzyFilter,
   Input,
   decodeKittyPrintable,
+  deleteKittyImage,
   Key,
   matchesKey,
   truncateToWidth,
@@ -440,6 +441,50 @@ export function clearSkillCache(): void {
   cachedSkillsCwd = null;
 }
 
+type OverlayCompositeTui = {
+  compositeLineAt?: (baseLine: string, overlayLine: string, startCol: number, overlayWidth: number, totalWidth: number) => string;
+  terminal?: { write?: (data: string) => void };
+  __piSkillSelectorImageOverlayPatch?: boolean;
+};
+
+const KITTY_IMAGE_SEQUENCE_PATTERN = /\u001b_G([\s\S]*?)\u001b\\/g;
+
+function extractKittyImageIds(line: string): number[] {
+  const ids: number[] = [];
+  for (const match of line.matchAll(KITTY_IMAGE_SEQUENCE_PATTERN)) {
+    const control = match[1]?.split(";", 1)[0] ?? "";
+    const id = control
+      .split(",")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith("i="))
+      ?.slice(2);
+    const numericId = Number(id);
+    if (Number.isInteger(numericId) && numericId > 0) ids.push(numericId);
+  }
+  return ids;
+}
+
+function isKittyImageLine(line: string): boolean {
+  return line.includes("\u001b_G");
+}
+
+export function patchTuiImageOverlayComposite(tui: OverlayCompositeTui): void {
+  if (tui.__piSkillSelectorImageOverlayPatch || typeof tui.compositeLineAt !== "function") return;
+
+  const originalCompositeLineAt = tui.compositeLineAt.bind(tui);
+  tui.compositeLineAt = (baseLine, overlayLine, startCol, overlayWidth, totalWidth) => {
+    if (!isKittyImageLine(baseLine)) {
+      return originalCompositeLineAt(baseLine, overlayLine, startCol, overlayWidth, totalWidth);
+    }
+
+    const deleteSequences = extractKittyImageIds(baseLine).map((id) => deleteKittyImage(id)).join("");
+    if (deleteSequences) tui.terminal?.write?.(deleteSequences);
+
+    return originalCompositeLineAt(" ".repeat(totalWidth), overlayLine, startCol, overlayWidth, totalWidth);
+  };
+  tui.__piSkillSelectorImageOverlayPatch = true;
+}
+
 async function pickSkill(ctx: ExtensionContext, initialQuery = ""): Promise<SkillPickerResult> {
   const skills = getCachedSkills(ctx.cwd);
   if (skills.length === 0) {
@@ -448,12 +493,17 @@ async function pickSkill(ctx: ExtensionContext, initialQuery = ""): Promise<Skil
   }
 
   return ctx.ui.custom<SkillPickerResult>(
-    (_tui, theme, _keybindings, done) => new SkillPickerComponent(skills, initialQuery, theme, done),
+    (tui, theme, _keybindings, done) => {
+      patchTuiImageOverlayComposite(tui as unknown as OverlayCompositeTui);
+      return new SkillPickerComponent(skills, initialQuery, theme, done);
+    },
     {
-      // Pi's overlay compositor intentionally preserves terminal image rows, so
-      // a previous pasted image can punch through the picker. Use focused
-      // non-overlay mode until the upstream TUI can composite over image lines.
-      overlay: false,
+      overlay: true,
+      overlayOptions: {
+        anchor: "center",
+        width: PANEL_MAX_WIDTH,
+        maxHeight: 18,
+      },
     },
   );
 }
